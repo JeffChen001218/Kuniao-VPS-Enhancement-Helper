@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         酷鸟云VPS增强助手 Kuniao VPS Enhancement Helper
 // @namespace    https://home.kuniaovps.com/
-// @version      1.0.0
+// @version      1.1.0
 // @description  一个用于酷鸟云VPS的增强脚本 An enhanced script for Kuniao VPS
 // @author       Codex
 // @license      MIT
