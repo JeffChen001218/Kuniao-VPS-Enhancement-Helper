@@ -414,6 +414,13 @@
     return btn instanceof HTMLButtonElement ? btn : null;
   }
 
+  function hasEnteredRemoteSession() {
+    return Array.from(document.querySelectorAll('div[class*="headerStatusBar_"]'))
+      .some((element) => String(element.className || '')
+        .split(/\s+/)
+        .some((className) => /^headerStatusBar_/.test(className)));
+  }
+
   function getSubmitForm(button) {
     if (button instanceof HTMLButtonElement && button.form) {
       return button.form;
@@ -588,12 +595,7 @@
   }
 
   function getPopupPermissionText() {
-    const enteredVps = Array.from(document.querySelectorAll('div[class*="headerStatusBar_"]'))
-      .some((element) => String(element.className || '')
-        .split(/\s+/)
-        .some((className) => /^headerStatusBar_/.test(className)));
-
-    if (enteredVps) {
+    if (hasEnteredRemoteSession()) {
       return {
         label: '已连接',
         detail: '',
@@ -1078,6 +1080,12 @@
     const persistedMappingUrl = getPersistedMappingUrl(location.href);
 
     retryPendingClose(persistedMappingUrl);
+
+    if (hasEnteredRemoteSession()) {
+      stopPopupPermissionPolling();
+      pendingRemoteEntryUrl = '';
+      return;
+    }
 
     const passwordInput = findLoginPasswordInput();
     if (passwordInput) {
