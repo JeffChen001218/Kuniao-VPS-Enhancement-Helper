@@ -345,11 +345,19 @@
   }
 
   function dispatchInputEvents(input) {
+    if (hasEnteredRemoteSession()) {
+      return;
+    }
+
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function fillInputValue(input, value) {
+    if (hasEnteredRemoteSession()) {
+      return;
+    }
+
     const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value');
     if (descriptor && typeof descriptor.set === 'function') {
       descriptor.set.call(input, value);
@@ -360,6 +368,10 @@
   }
 
   function findLoginPasswordInput() {
+    if (hasEnteredRemoteSession()) {
+      return null;
+    }
+
     const passwordSelectors = [
       'input[type="password"]',
       'input[autocomplete="current-password"]',
@@ -380,14 +392,16 @@
   }
 
   function observeManualPasswordInput(input, url) {
-    if (!(input instanceof HTMLInputElement) || observedPasswordInputs.has(input)) {
+    if (hasEnteredRemoteSession() ||
+      !(input instanceof HTMLInputElement) ||
+      observedPasswordInputs.has(input)) {
       return;
     }
 
     observedPasswordInputs.add(input);
 
     const savePassword = (event) => {
-      if (!event.isTrusted) {
+      if (!event.isTrusted || hasEnteredRemoteSession()) {
         return;
       }
 
@@ -408,6 +422,10 @@
   }
 
   function clickLoginButton(input) {
+    if (hasEnteredRemoteSession()) {
+      return false;
+    }
+
     const form = input.form;
     const buttonSelectors = [
       'button[type="submit"]',
