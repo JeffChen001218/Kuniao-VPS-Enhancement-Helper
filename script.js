@@ -17,6 +17,7 @@
 
   const SUPPORTED_HOSTS = ['home.kuniaovps.com', 'home.geliyun.com'];
   const STORAGE_KEY = 'vps-auto-login-mappings';
+  const MAPPINGS_SYNC_CHANNEL = 'tm-vps-auto-login:mappings-sync';
   const PANEL_POSITION_KEY = 'vps-auto-login-panel-position';
   const SUBMIT_GUARD_MS = 60000;
   const REMOTE_CLICK_GUARD_MS = 15000;
@@ -37,6 +38,7 @@
   const INTERNAL_UI_PERMISSION_PROBE_SUPPRESS_MS = 1500;
   const attemptCache = new Map();
   const observedPasswordInputs = new WeakSet();
+  const tabInstanceId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   let originalDocumentTitle = document.title;
   let appliedMappingTitle = '';
   let remoteClickTimer = 0;
@@ -57,6 +59,8 @@
   let popupPermissionShouldRecheckOnFocus = false;
   let popupPermissionProbeEventsBound = false;
   let statusLabelPollTimer = 0;
+  let mappingsSyncChannel = null;
+  let mappingsSyncBound = false;
 
   if (!SUPPORTED_HOSTS.includes(location.host)) {
     return;
@@ -167,6 +171,55 @@
 
   function writeMappings(mappings) {
     storage.set(STORAGE_KEY, mappings);
+    notifyMappingsUpdated(mappings);
+  }
+
+  function notifyMappingsUpdated(mappings) {
+    if (!(mappingsSyncChannel instanceof BroadcastChannel)) {
+      return;
+    }
+
+    try {
+      mappingsSyncChannel.postMessage({
+        type: 'mappings-updated',
+        mappings: Array.isArray(mappings) ? mappings : readMappings(),
+        senderId: tabInstanceId,
+        updatedAt: Date.now(),
+      });
+    } catch (error) {
+      console.warn('[VPS Auto Login] broadcast mappings update failed.', error);
+    }
+  }
+
+  function refreshMappingsFromExternalUpdate(nextMappings = readMappings()) {
+    syncDocumentTitle(nextMappings);
+
+    const panelHost = document.getElementById(PANEL_ID);
+    if (typeof panelHost?.__refreshMappings === 'function') {
+      panelHost.__refreshMappings(nextMappings);
+    }
+
+    tryAutoLogin(nextMappings);
+  }
+
+  function bindMappingsSync() {
+    if (mappingsSyncBound || typeof BroadcastChannel !== 'function') {
+      return;
+    }
+
+    mappingsSyncBound = true;
+    mappingsSyncChannel = new BroadcastChannel(MAPPINGS_SYNC_CHANNEL);
+    mappingsSyncChannel.addEventListener('message', (event) => {
+      const data = event?.data;
+      if (!data ||
+        data.type !== 'mappings-updated' ||
+        data.senderId === tabInstanceId) {
+        return;
+      }
+
+      const nextMappings = Array.isArray(data.mappings) ? data.mappings : readMappings();
+      refreshMappingsFromExternalUpdate(nextMappings);
+    });
   }
 
   function findMappingForCurrentPage(mappings) {
@@ -2306,6 +2359,132 @@
       }
     }
 
+    function getSavedItemMarkup(item, matched) {
+      const passwordEditing = editingPasswordIds.has(item.id);
+      const passwordDraft = passwordDrafts.has(item.id) ? passwordDrafts.get(item.id) : item.password;
+      const passwordChanged = passwordDraft.trim() !== item.password;
+      const passwordText = maskPassword(item.password);
+      const savedNumber = item.number || '';
+      const numberEditing = editingNumberIds.has(item.id);
+      const draftNumber = numberDrafts.has(item.id) ? numberDrafts.get(item.id) : savedNumber;
+      const numberChanged = draftNumber.trim() !== savedNumber;
+      const numberActionText = savedNumber ? '更新' : '添加';
+
+      return `
+          <div class="item ${matched ? 'active' : ''}" data-id="${escapeHtml(item.id)}">
+            <div class="number-row">
+              ${numberEditing ? `
+                <span class="number-label">编号</span>
+                <input class="number-input" type="text" value="${escapeHtml(draftNumber)}" placeholder="未设置" data-id="${escapeHtml(item.id)}" />
+                <button class="save-number" type="button" data-action="save-number" data-id="${escapeHtml(item.id)}" ${numberChanged ? '' : 'hidden'}>${numberActionText}</button>
+              ` : `
+                <span class="number-label">编号：</span>
+                <span class="number-value editable" data-action="edit-number" data-id="${escapeHtml(item.id)}" title="点击编辑编号">${escapeHtml(savedNumber || '未设置')}</span>
+              `}
+            </div>
+            <span class="item-url">${escapeHtml(item.url)}</span>
+            ${passwordEditing ? `
+              <div class="password-row">
+                <span class="number-label">密码</span>
+                <input class="password-input" type="text" value="${escapeHtml(passwordDraft)}" placeholder="输入密码" data-id="${escapeHtml(item.id)}" />
+                <button class="save-password" type="button" data-action="save-password" data-id="${escapeHtml(item.id)}" ${passwordChanged ? '' : 'hidden'}>更新</button>
+              </div>
+            ` : `
+              <button class="item-password" type="button" data-action="edit-password" data-id="${escapeHtml(item.id)}" title="点击编辑密码">
+                密码：${escapeHtml(passwordText)}
+              </button>
+            `}
+            <div class="item-actions">
+              ${matched ? '' : `<button class="jump" type="button" data-action="jump" data-id="${escapeHtml(item.id)}">跳转</button>`}
+              ${matched ? '' : `<button class="open-tab" type="button" data-action="open-tab" data-id="${escapeHtml(item.id)}">在新Tab打开</button>`}
+              <button class="delete" type="button" data-action="delete" data-id="${escapeHtml(item.id)}">删除</button>
+            </div>
+          </div>
+        `;
+    }
+
+    function createListItemElement(markup) {
+      const template = document.createElement('template');
+      template.innerHTML = markup.trim();
+      return template.content.firstElementChild;
+    }
+
+    function refreshSavedItems(nextMappings = readMappings()) {
+      const previousMatched = findMappingForCurrentPage(mappings);
+      const nextMatched = findMappingForCurrentPage(nextMappings);
+      if (Boolean(previousMatched) !== Boolean(nextMatched) ||
+        previousMatched?.id !== nextMatched?.id) {
+        mappings = nextMappings;
+        renderList();
+        return;
+      }
+
+      mappings = nextMappings;
+      syncDocumentTitle(nextMappings);
+      updateControlDisplay(getCurrentControlNumber(nextMatched));
+      renderManualCreator();
+      renderDeleteConfirm();
+
+      if (!list || !isPanelOpen()) {
+        return;
+      }
+
+      const temporaryItem = list.querySelector('.item.unsaved');
+      const nextSavedItems = nextMatched
+        ? [nextMatched, ...nextMappings.filter((item) => item.id !== nextMatched.id)]
+        : nextMappings.slice();
+      const nextSavedIds = new Set(nextSavedItems.map((item) => item.id));
+
+      list.querySelectorAll('.empty').forEach((element) => element.remove());
+      list.querySelectorAll('.item:not(.unsaved)').forEach((element) => {
+        const id = element instanceof HTMLElement ? element.dataset.id : '';
+        if (id && !nextSavedIds.has(id)) {
+          element.remove();
+        }
+      });
+
+      const existingSavedItems = new Map(
+        [...list.querySelectorAll('.item:not(.unsaved)')]
+          .filter((element) => element instanceof HTMLElement)
+          .map((element) => [element.dataset.id || '', element]),
+      );
+
+      let previousNode = temporaryItem instanceof HTMLElement ? temporaryItem : null;
+      nextSavedItems.forEach((item) => {
+        const matched = Boolean(nextMatched && nextMatched.id === item.id);
+        const existing = existingSavedItems.get(item.id);
+        const shouldPreserveEditing = editingNumberIds.has(item.id) || editingPasswordIds.has(item.id);
+        let targetNode = existing;
+
+        if (!targetNode) {
+          targetNode = createListItemElement(getSavedItemMarkup(item, matched));
+        } else if (!shouldPreserveEditing) {
+          const nextMarkup = getSavedItemMarkup(item, matched).trim();
+          if (targetNode.outerHTML !== nextMarkup) {
+            const replacement = createListItemElement(nextMarkup);
+            targetNode.replaceWith(replacement);
+            targetNode = replacement;
+          }
+        }
+
+        if (!(targetNode instanceof HTMLElement)) {
+          return;
+        }
+
+        const referenceNode = previousNode ? previousNode.nextSibling : list.firstChild;
+        if (targetNode !== referenceNode) {
+          list.insertBefore(targetNode, referenceNode);
+        }
+        previousNode = targetNode;
+      });
+
+      if (!temporaryItem && nextSavedItems.length === 0) {
+        list.innerHTML = '<div class="empty">还没有保存任何 VPS 信息。</div>';
+      }
+
+      window.setTimeout(updatePanelLayout, 0);
+    }
+
     function renderList() {
       mappings = readMappings();
       const matched = findMappingForCurrentPage(mappings);
@@ -2332,44 +2511,37 @@
         .map((item) => {
           const unsavedItem = Boolean(item.unsaved);
           const matchedItem = Boolean((matched && matched.id === item.id) || unsavedItem);
-          const passwordEditing = unsavedItem || editingPasswordIds.has(item.id);
+
+          if (!unsavedItem) {
+            return getSavedItemMarkup(item, matchedItem);
+          }
+
           const passwordDraft = passwordDrafts.has(item.id) ? passwordDrafts.get(item.id) : item.password;
-          const passwordChanged = unsavedItem ? passwordDraft.trim() !== '' : passwordDraft.trim() !== item.password;
-          const passwordText = maskPassword(item.password);
-          const passwordActionText = unsavedItem ? '保存' : '更新';
+          const passwordChanged = passwordDraft.trim() !== '';
           const savedNumber = item.number || '';
           const numberEditing = editingNumberIds.has(item.id);
           const draftNumber = numberDrafts.has(item.id) ? numberDrafts.get(item.id) : savedNumber;
           const numberChanged = draftNumber.trim() !== savedNumber;
-          const numberActionText = savedNumber ? '更新' : '添加';
-          const numberDisplayText = savedNumber || '未设置';
-
           return `
           <div class="item ${matchedItem ? 'active' : ''} ${unsavedItem ? 'unsaved' : ''}" data-id="${escapeHtml(item.id)}">
             <div class="number-row">
               ${numberEditing ? `
                 <span class="number-label">编号</span>
                 <input class="number-input" type="text" value="${escapeHtml(draftNumber)}" placeholder="未设置" data-id="${escapeHtml(item.id)}" />
-                <button class="save-number" type="button" data-action="save-number" data-id="${escapeHtml(item.id)}" ${numberChanged ? '' : 'hidden'}>${numberActionText}</button>
+                <button class="save-number" type="button" data-action="save-number" data-id="${escapeHtml(item.id)}" ${numberChanged ? '' : 'hidden'}>添加</button>
                 ${unsavedItem ? '<span class="unsaved-badge">未保存</span>' : ''}
               ` : `
                 <span class="number-label">编号：</span>
-                <span class="number-value editable" data-action="edit-number" data-id="${escapeHtml(item.id)}" title="点击编辑编号">${escapeHtml(numberDisplayText)}</span>
+                <span class="number-value editable" data-action="edit-number" data-id="${escapeHtml(item.id)}" title="点击编辑编号">${escapeHtml(savedNumber || '未设置')}</span>
                 ${unsavedItem ? '<span class="unsaved-badge">未保存</span>' : ''}
               `}
             </div>
             <span class="item-url">${escapeHtml(item.url)}</span>
-            ${passwordEditing ? `
-              <div class="password-row">
-                <span class="number-label">密码</span>
-                <input class="password-input" type="text" value="${escapeHtml(passwordDraft)}" placeholder="输入密码" data-id="${escapeHtml(item.id)}" />
-                <button class="save-password" type="button" data-action="save-password" data-id="${escapeHtml(item.id)}" ${passwordChanged ? '' : 'hidden'}>${passwordActionText}</button>
-              </div>
-            ` : `
-              <button class="item-password" type="button" data-action="edit-password" data-id="${escapeHtml(item.id)}" title="点击编辑密码">
-                密码：${escapeHtml(passwordText)}
-              </button>
-            `}
+            <div class="password-row">
+              <span class="number-label">密码</span>
+              <input class="password-input" type="text" value="${escapeHtml(passwordDraft)}" placeholder="输入密码" data-id="${escapeHtml(item.id)}" />
+              <button class="save-password" type="button" data-action="save-password" data-id="${escapeHtml(item.id)}" ${passwordChanged ? '' : 'hidden'}>保存</button>
+            </div>
             <div class="item-actions">
               ${matchedItem ? '' : `<button class="jump" type="button" data-action="jump" data-id="${escapeHtml(item.id)}">跳转</button>`}
               ${matchedItem ? '' : `<button class="open-tab" type="button" data-action="open-tab" data-id="${escapeHtml(item.id)}">在新Tab打开</button>`}
@@ -2883,6 +3055,7 @@
     renderList();
     document.documentElement.appendChild(host);
     host.__syncPermissionGuidePlacement = syncPermissionGuidePlacement;
+    host.__refreshMappings = refreshSavedItems;
     renderPopupPermissionBadge();
     applyPanelPosition();
     window.addEventListener('resize', () => {
@@ -2905,6 +3078,7 @@
   function boot() {
     const run = () => {
       const mappings = readMappings();
+      bindMappingsSync();
       createPopupPermissionBadge();
       createPanel();
       startStatusLabelPolling();

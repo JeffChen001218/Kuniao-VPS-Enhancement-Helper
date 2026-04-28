@@ -19,6 +19,7 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
     - **手动新增**：支持在面板中手动输入 VPS 信息并添加记录。
     - **安全删除**：删除记录前增加确认步骤，防止误操作。
     - **动态操作**：通过面板更新、删除或直接跳转至已保存的 VPS 地址。
+    - **数据更新**：各个Tab间数据进行实时同步
 
 ---
 
