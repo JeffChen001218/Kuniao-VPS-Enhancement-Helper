@@ -1,21 +1,25 @@
 // ==UserScript==
 // @name         酷鸟云VPS增强助手 Kuniao VPS Enhancement Helper
 // @namespace    https://home.kuniaovps.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  一个用于酷鸟云VPS的增强脚本 An enhanced script for Kuniao VPS
 // @author       Codex
 // @license      MIT
 // @match        https://home.kuniaovps.com/*
 // @match        https://home.geliyun.com/*
+// @match        *://ntba.gte666.com/*
 // @run-at       document-idle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const SUPPORTED_HOSTS = ['home.kuniaovps.com', 'home.geliyun.com'];
+  const VPS_HOSTS = ['home.kuniaovps.com', 'home.geliyun.com'];
+  const EXTERNAL_LINK_HOSTS = ['ntba.gte666.com'];
+  const SUPPORTED_HOSTS = [...VPS_HOSTS, ...EXTERNAL_LINK_HOSTS];
   const STORAGE_KEY = 'vps-auto-login-mappings';
   const MAPPINGS_SYNC_CHANNEL = 'tm-vps-auto-login:mappings-sync';
   const PANEL_POSITION_KEY = 'vps-auto-login-panel-position';
@@ -27,6 +31,9 @@
   const TAB_CLOSE_MAX_RETRY_MS = 5000;
   const PANEL_ID = 'tm-vps-auto-login-root';
   const PERMISSION_BADGE_ID = 'tm-vps-popup-permission-status';
+  const EXTERNAL_JUMP_BUTTON_CLASS = 'tm-vps-saved-link-jump';
+  const RENDER_LABEL_CLASS = 'render-label';
+  const AVATAR_CLASS = 'n-avatar';
   const REMOTE_TAB_MARK_KEY = 'tm-vps-auto-login:opened-remote-tab';
   const PANEL_EDGE_MARGIN = 12;
   const PANEL_BASE_WIDTH = 360;
@@ -36,6 +43,8 @@
   const POPUP_PERMISSION_ALLOWED_TTL_MS = 10000;
   const STATUS_LABEL_POLL_INTERVAL_MS = 1000;
   const INTERNAL_UI_PERMISSION_PROBE_SUPPRESS_MS = 1500;
+  const EXTERNAL_JUMP_PERMISSION_TIMEOUT_MS = 10000;
+  const EXTERNAL_JUMP_PERMISSION_POLL_INTERVAL_MS = 1000;
   const attemptCache = new Map();
   const observedPasswordInputs = new WeakSet();
   const tabInstanceId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -61,9 +70,27 @@
   let statusLabelPollTimer = 0;
   let mappingsSyncChannel = null;
   let mappingsSyncBound = false;
+  let mappingsValueSyncBound = false;
+  let externalJumpPermissionTimer = 0;
+  let externalJumpPermissionDeadline = 0;
+  let pendingExternalJumpUrl = '';
+  let pendingExternalJumpLabel = '';
+  let externalJumpPermissionMode = 'idle';
 
-  if (!SUPPORTED_HOSTS.includes(location.host)) {
+  function normalizeHostName(host) {
+    return String(host || '').split(':')[0];
+  }
+
+  if (!SUPPORTED_HOSTS.includes(normalizeHostName(location.host))) {
     return;
+  }
+
+  function isVpsHost(host = location.host) {
+    return VPS_HOSTS.includes(normalizeHostName(host));
+  }
+
+  function isExternalSavedLinkHost(host = location.host) {
+    return EXTERNAL_LINK_HOSTS.includes(normalizeHostName(host));
   }
 
   const storage = {
@@ -108,7 +135,7 @@
       const type = url.searchParams.get('type');
       const key = url.searchParams.get('key');
 
-      if (SUPPORTED_HOSTS.includes(url.host)) {
+      if (isVpsHost(url.host)) {
         url.protocol = 'https:';
       }
 
@@ -133,7 +160,7 @@
   function getMappingMatchKey(input) {
     try {
       const url = new URL(normalizeUrl(input), location.origin);
-      if (SUPPORTED_HOSTS.includes(url.host)) {
+      if (isVpsHost(url.host)) {
         url.host = 'supported-vps-host.invalid';
       }
 
@@ -172,10 +199,12 @@
   function writeMappings(mappings) {
     storage.set(STORAGE_KEY, mappings);
     notifyMappingsUpdated(mappings);
+    syncExternalSavedLinkButtons(mappings);
   }
 
   function notifyMappingsUpdated(mappings) {
-    if (!(mappingsSyncChannel instanceof BroadcastChannel)) {
+    if (typeof BroadcastChannel !== 'function' ||
+      !(mappingsSyncChannel instanceof BroadcastChannel)) {
       return;
     }
 
@@ -192,32 +221,49 @@
   }
 
   function refreshMappingsFromExternalUpdate(nextMappings = readMappings()) {
-    syncDocumentTitle(nextMappings);
+    if (isVpsHost()) {
+      syncDocumentTitle(nextMappings);
+    }
+    syncExternalSavedLinkButtons(nextMappings);
 
     const panelHost = document.getElementById(PANEL_ID);
     if (typeof panelHost?.__refreshMappings === 'function') {
       panelHost.__refreshMappings(nextMappings);
     }
 
-    tryAutoLogin(nextMappings);
+    if (isVpsHost()) {
+      tryAutoLogin(nextMappings);
+    }
   }
 
   function bindMappingsSync() {
-    if (mappingsSyncBound || typeof BroadcastChannel !== 'function') {
+    if (!mappingsSyncBound && typeof BroadcastChannel === 'function') {
+      mappingsSyncBound = true;
+      mappingsSyncChannel = new BroadcastChannel(MAPPINGS_SYNC_CHANNEL);
+      mappingsSyncChannel.addEventListener('message', (event) => {
+        const data = event?.data;
+        if (!data ||
+          data.type !== 'mappings-updated' ||
+          data.senderId === tabInstanceId) {
+          return;
+        }
+
+        const nextMappings = Array.isArray(data.mappings) ? data.mappings : readMappings();
+        refreshMappingsFromExternalUpdate(nextMappings);
+      });
+    }
+
+    if (mappingsValueSyncBound || typeof GM_addValueChangeListener !== 'function') {
       return;
     }
 
-    mappingsSyncBound = true;
-    mappingsSyncChannel = new BroadcastChannel(MAPPINGS_SYNC_CHANNEL);
-    mappingsSyncChannel.addEventListener('message', (event) => {
-      const data = event?.data;
-      if (!data ||
-        data.type !== 'mappings-updated' ||
-        data.senderId === tabInstanceId) {
+    mappingsValueSyncBound = true;
+    GM_addValueChangeListener(STORAGE_KEY, (_key, _oldValue, newValue, remote) => {
+      if (!remote) {
         return;
       }
 
-      const nextMappings = Array.isArray(data.mappings) ? data.mappings : readMappings();
+      const nextMappings = Array.isArray(newValue) ? newValue : readMappings();
       refreshMappingsFromExternalUpdate(nextMappings);
     });
   }
@@ -666,6 +712,32 @@
   }
 
   function getPopupPermissionText() {
+    if (isExternalSavedLinkHost()) {
+      if (externalJumpPermissionMode === 'checking') {
+        return {
+          label: '等待跳转授权',
+          detail: '',
+          tone: 'checking',
+        };
+      }
+
+      if (externalJumpPermissionMode === 'blocked') {
+        return {
+          label: '跳转失败',
+          detail: '',
+          tone: 'blocked',
+        };
+      }
+
+      if (externalJumpPermissionMode === 'allowed') {
+        return {
+          label: '正在打开新Tab',
+          detail: '',
+          tone: 'allowed',
+        };
+      }
+    }
+
     if (hasEnteredRemoteSession()) {
       return {
         label: '已连接',
@@ -690,6 +762,18 @@
   }
 
   function getPopupPermissionGuideText() {
+    if (isExternalSavedLinkHost()) {
+      if (externalJumpPermissionMode === 'checking') {
+        return `请允许当前站点打开弹出窗口与重定向，脚本会在 ${Math.ceil(Math.max(0, externalJumpPermissionDeadline - Date.now()) / 1000)} 秒内自动重试跳转。`;
+      }
+
+      if (externalJumpPermissionMode === 'blocked') {
+        return '跳转失败：浏览器仍阻止此站点打开新Tab，请手动允许弹出窗口与重定向后再点击按钮。';
+      }
+
+      return '';
+    }
+
     if (!shouldProbePopupPermission()) {
       return '';
     }
@@ -1188,6 +1272,290 @@
 
       clickEnterRemoteButton(persistedMappingUrl);
     }
+  }
+
+  function isExactClassSpan(element, className) {
+    return element instanceof HTMLSpanElement &&
+      String(element.getAttribute('class') || '').trim() === className;
+  }
+
+  function getExactClassSpans(className, root = document) {
+    return Array.from(root.querySelectorAll(`span.${className}`))
+      .filter((element) => isExactClassSpan(element, className));
+  }
+
+  function getExternalJumpContainerFromAvatar(avatar) {
+    const parent1 = avatar?.parentElement;
+    const parent2 = parent1?.parentElement;
+    const parent3 = parent2?.parentElement;
+    return parent3 instanceof HTMLElement ? parent3 : null;
+  }
+
+  function getNumberedMappings(mappings = readMappings()) {
+    return mappings
+      .map((item) => ({
+        ...item,
+        number: String(item.number || '').trim(),
+        normalizedNumber: String(item.number || '').replace(/\s+/g, ''),
+      }))
+      .filter((item) => item.number && item.normalizedNumber && item.url)
+      .sort((a, b) => b.normalizedNumber.length - a.normalizedNumber.length);
+  }
+
+  function findMappingForExternalLabel(label, numberedMappings) {
+    const labelText = String(label.textContent || '');
+    const normalizedLabelText = labelText.replace(/\s+/g, '');
+    return numberedMappings.find((item) => (
+      labelText.includes(item.number) ||
+      normalizedLabelText.includes(item.normalizedNumber)
+    )) || null;
+  }
+
+  function applyExternalJumpButtonStyle(button) {
+    button.style.all = 'initial';
+    button.style.boxSizing = 'border-box';
+    button.style.display = 'inline-flex';
+    button.style.alignItems = 'center';
+    button.style.justifyContent = 'center';
+    button.style.flex = '0 0 auto';
+    button.style.order = '-999';
+    button.style.height = '28px';
+    button.style.minWidth = '48px';
+    button.style.maxWidth = '180px';
+    button.style.padding = '0 10px';
+    button.style.margin = '2px 8px 2px 0';
+    button.style.border = '1px solid rgba(37, 99, 235, 0.35)';
+    button.style.borderRadius = '6px';
+    button.style.background = '#2563eb';
+    button.style.color = '#ffffff';
+    button.style.font = '600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    button.style.whiteSpace = 'nowrap';
+    button.style.overflow = 'hidden';
+    button.style.textOverflow = 'ellipsis';
+    button.style.cursor = 'pointer';
+    button.style.userSelect = 'none';
+    button.style.boxShadow = '0 4px 10px rgba(37, 99, 235, 0.18)';
+    button.style.transition = 'background-color 120ms ease, border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease';
+  }
+
+  function setExternalJumpButtonHover(button, hovering) {
+    if (hovering) {
+      button.style.background = '#1d4ed8';
+      button.style.borderColor = 'rgba(29, 78, 216, 0.46)';
+      button.style.transform = 'translateY(-1px)';
+      button.style.boxShadow = '0 6px 14px rgba(37, 99, 235, 0.22)';
+      return;
+    }
+
+    applyExternalJumpButtonStyle(button);
+  }
+
+  function removeDuplicateExternalJumpButtons(container, keeper) {
+    Array.from(container.children).forEach((child) => {
+      if (child !== keeper &&
+        child instanceof HTMLElement &&
+        child.classList.contains(EXTERNAL_JUMP_BUTTON_CLASS)) {
+        child.remove();
+      }
+    });
+  }
+
+  function openExternalJumpTab(url) {
+    try {
+      const opened = window.open(url, '_blank');
+      if (!opened || opened.closed) {
+        return false;
+      }
+
+      try {
+        opened.opener = null;
+      } catch (error) {
+        // Ignore browsers that disallow mutating opener on cross-origin tabs.
+      }
+
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function clearExternalJumpPermissionWait(mode = 'idle', detail = '') {
+    if (externalJumpPermissionTimer) {
+      clearTimeout(externalJumpPermissionTimer);
+      externalJumpPermissionTimer = 0;
+    }
+
+    pendingExternalJumpUrl = '';
+    pendingExternalJumpLabel = '';
+    externalJumpPermissionDeadline = 0;
+    externalJumpPermissionMode = mode;
+    if (detail || mode !== 'idle') {
+      setPopupPermissionState(mode, detail);
+    } else {
+      const badgeHost = document.getElementById(PERMISSION_BADGE_ID);
+      if (isExternalSavedLinkHost() && badgeHost instanceof HTMLElement) {
+        badgeHost.remove();
+        return;
+      }
+
+      renderPopupPermissionBadge();
+    }
+  }
+
+  function scheduleExternalJumpPermissionProbe() {
+    if (!pendingExternalJumpUrl || externalJumpPermissionTimer) {
+      return;
+    }
+
+    externalJumpPermissionTimer = window.setTimeout(() => {
+      externalJumpPermissionTimer = 0;
+      pollExternalJumpPermission();
+    }, EXTERNAL_JUMP_PERMISSION_POLL_INTERVAL_MS);
+  }
+
+  function pollExternalJumpPermission() {
+    if (!pendingExternalJumpUrl) {
+      clearExternalJumpPermissionWait();
+      return;
+    }
+
+    if (Date.now() >= externalJumpPermissionDeadline) {
+      clearExternalJumpPermissionWait('blocked', '跳转失败：浏览器仍阻止打开新Tab');
+      return;
+    }
+
+    const remainingSeconds = Math.ceil(Math.max(0, externalJumpPermissionDeadline - Date.now()) / 1000);
+    externalJumpPermissionMode = 'checking';
+    setPopupPermissionState('checking', `等待浏览器允许打开新Tab（剩余${remainingSeconds}s）`);
+
+    if (probePopupPermissionOnce() && openExternalJumpTab(pendingExternalJumpUrl)) {
+      clearExternalJumpPermissionWait('allowed', `正在打开${pendingExternalJumpLabel || 'VPS'}`);
+      window.setTimeout(() => {
+        if (externalJumpPermissionMode === 'allowed') {
+          clearExternalJumpPermissionWait();
+        }
+      }, 1800);
+      return;
+    }
+
+    scheduleExternalJumpPermissionProbe();
+  }
+
+  function waitForExternalJumpPermission(url, label) {
+    pendingExternalJumpUrl = url;
+    pendingExternalJumpLabel = label;
+    externalJumpPermissionDeadline = Date.now() + EXTERNAL_JUMP_PERMISSION_TIMEOUT_MS;
+    externalJumpPermissionMode = 'checking';
+    createPopupPermissionBadge();
+    bindPopupPermissionProbeEvents();
+    pollExternalJumpPermission();
+  }
+
+  function handleExternalJumpClick(url, label) {
+    clearExternalJumpPermissionWait();
+    if (openExternalJumpTab(url)) {
+      return;
+    }
+
+    waitForExternalJumpPermission(url, label);
+  }
+
+  function upsertExternalJumpButton(container, mapping) {
+    const targetUrl = normalizeUrl(mapping.url);
+    if (!targetUrl) {
+      return;
+    }
+
+    const existingButton = Array.from(container.children)
+      .find((child) => child instanceof HTMLButtonElement &&
+        child.classList.contains(EXTERNAL_JUMP_BUTTON_CLASS));
+    const button = existingButton || document.createElement('button');
+    const buttonText = `打开 [${mapping.number}] VPS`;
+    const title = `${buttonText}：${targetUrl}`;
+
+    if (!existingButton) {
+      button.type = 'button';
+      button.className = EXTERNAL_JUMP_BUTTON_CLASS;
+    }
+
+    button.dataset.tmVpsMappingId = mapping.id;
+    button.dataset.tmVpsTargetUrl = targetUrl;
+    button.setAttribute('aria-label', title);
+    if (button.title !== title) {
+      button.title = title;
+    }
+    if (button.textContent !== buttonText) {
+      button.textContent = buttonText;
+    }
+
+    applyExternalJumpButtonStyle(button);
+    button.onmouseenter = () => setExternalJumpButtonHover(button, true);
+    button.onmouseleave = () => setExternalJumpButtonHover(button, false);
+    button.onmousedown = () => {
+      button.style.transform = 'translateY(0) scale(0.98)';
+    };
+    button.onmouseup = () => setExternalJumpButtonHover(button, true);
+    button.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      handleExternalJumpClick(targetUrl, buttonText);
+    };
+
+    removeDuplicateExternalJumpButtons(container, button);
+    if (container.firstChild !== button) {
+      container.insertBefore(button, container.firstChild);
+    }
+  }
+
+  function removeExternalSavedLinkButtons() {
+    document.querySelectorAll(`.${EXTERNAL_JUMP_BUTTON_CLASS}`).forEach((button) => {
+      button.remove();
+    });
+  }
+
+  function syncExternalSavedLinkButtons(mappings = readMappings()) {
+    if (!isExternalSavedLinkHost()) {
+      return;
+    }
+
+    const numberedMappings = getNumberedMappings(mappings);
+    if (numberedMappings.length === 0) {
+      removeExternalSavedLinkButtons();
+      return;
+    }
+
+    const avatarContainers = Array.from(new Set(
+      getExactClassSpans(AVATAR_CLASS)
+        .map((avatar) => getExternalJumpContainerFromAvatar(avatar))
+        .filter((container) => container instanceof HTMLElement),
+    ));
+
+    const activeContainers = new Set();
+    getExactClassSpans(RENDER_LABEL_CLASS).forEach((label) => {
+      const mapping = findMappingForExternalLabel(label, numberedMappings);
+      if (!mapping) {
+        return;
+      }
+
+      const container = avatarContainers[0] || null;
+      if (!container) {
+        return;
+      }
+
+      if (activeContainers.has(container)) {
+        return;
+      }
+
+      activeContainers.add(container);
+      upsertExternalJumpButton(container, mapping);
+    });
+
+    document.querySelectorAll(`.${EXTERNAL_JUMP_BUTTON_CLASS}`).forEach((button) => {
+      if (button.parentElement && activeContainers.has(button.parentElement)) {
+        return;
+      }
+      button.remove();
+    });
   }
 
   function createPanel() {
@@ -3097,17 +3465,23 @@
     const run = () => {
       const mappings = readMappings();
       bindMappingsSync();
-      createPopupPermissionBadge();
-      createPanel();
-      startStatusLabelPolling();
-      tryAutoLogin(mappings);
+      if (isVpsHost()) {
+        createPopupPermissionBadge();
+        createPanel();
+        startStatusLabelPolling();
+        tryAutoLogin(mappings);
+      }
+      syncExternalSavedLinkButtons(mappings);
     };
 
     run();
 
     const observer = new MutationObserver(() => {
       const mappings = readMappings();
-      tryAutoLogin(mappings);
+      if (isVpsHost()) {
+        tryAutoLogin(mappings);
+      }
+      syncExternalSavedLinkButtons(mappings);
     });
 
     observer.observe(document.documentElement, {
