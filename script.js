@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         酷鸟云VPS增强助手 Kuniao VPS Enhancement Helper
 // @namespace    https://home.kuniaovps.com/
-// @version      1.2.0
+// @version      1.3.0
 // @description  一个用于酷鸟云VPS的增强脚本 An enhanced script for Kuniao VPS
 // @author       Codex
 // @license      MIT
@@ -1883,12 +1883,31 @@
           box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16), 0 8px 18px rgba(15, 118, 110, 0.14);
           transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
         }
+        .panel-actions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-start;
+          gap: 8px;
+          width: 100%;
+          margin-bottom: 12px;
+        }
+        .panel-action.secondary {
+          background: #e2e8f0;
+          color: #0f172a;
+          box-shadow: none;
+        }
         .panel-action:hover {
           transform: translateY(-1px);
           box-shadow: 0 12px 28px rgba(37, 99, 235, 0.2), 0 10px 22px rgba(15, 118, 110, 0.18);
           filter: saturate(1.04);
         }
+        .panel-action.secondary:hover {
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+        }
         .panel-action[hidden] {
+          display: none;
+        }
+        .file-input[hidden] {
           display: none;
         }
         .creator-card {
@@ -2282,7 +2301,12 @@
               <h3 class="title">VPS 登录信息</h3>
               <p class="desc">脚本会按当前链接识别 VPS；手动登录一次后会自动记住密码。</p>
             </div>
+          </div>
+          <div class="panel-actions">
+            <button class="panel-action secondary js-import-mappings" type="button">导入</button>
+            <button class="panel-action secondary js-export-mappings" type="button">导出</button>
             <button class="panel-action js-add-mapping" type="button">新增 VPS</button>
+            <input class="file-input js-import-file" type="file" accept="application/json,.json" hidden />
           </div>
           <div class="creator-card js-manual-create" hidden>
             <p class="creator-title">手动新增 VPS</p>
@@ -2318,6 +2342,9 @@
     const controlRow = shadowRoot.querySelector('.control-row');
     const numberChip = shadowRoot.querySelector('.number-chip');
     const addMappingButton = shadowRoot.querySelector('.js-add-mapping');
+    const importMappingsButton = shadowRoot.querySelector('.js-import-mappings');
+    const exportMappingsButton = shadowRoot.querySelector('.js-export-mappings');
+    const importFileInput = shadowRoot.querySelector('.js-import-file');
     const manualCreator = shadowRoot.querySelector('.js-manual-create');
     const manualUrlInput = shadowRoot.querySelector('.js-manual-url');
     const manualNumberInput = shadowRoot.querySelector('.js-manual-number');
@@ -2614,6 +2641,84 @@
       } else {
         permissionGuide.style.right = `${Math.max(0, Math.round(wrapRect.right - controlRect.right))}px`;
       }
+    }
+
+    function createMappingId() {
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function normalizeImportedMappings(value) {
+      if (!Array.isArray(value)) {
+        throw new Error('JSON 内容必须是 VPS 信息数组。');
+      }
+
+      const seenUrls = new Set();
+      return value
+        .map((item) => ({
+          id: String(item?.id || createMappingId()),
+          number: item?.number == null ? '' : String(item.number),
+          url: normalizeUrl(item?.url || ''),
+          password: String(item?.password || ''),
+        }))
+        .filter((item) => {
+          if (!item.url || !item.password || seenUrls.has(item.url)) {
+            return false;
+          }
+
+          seenUrls.add(item.url);
+          return true;
+        });
+    }
+
+    function getExportFileName() {
+      const date = new Date();
+      const pad = (value) => String(value).padStart(2, '0');
+      const stamp = [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+      ].join('-');
+
+      return `kuniao-vps-mappings-${stamp}.json`;
+    }
+
+    function exportMappings() {
+      const data = JSON.stringify(readMappings(), null, 2);
+      const blob = new Blob([data], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = getExportFileName();
+      link.rel = 'noopener';
+      document.documentElement.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function replaceMappingsFromImport(nextMappings) {
+      writeMappings(nextMappings);
+      numberDrafts.clear();
+      editingNumberIds.clear();
+      passwordDrafts.clear();
+      editingPasswordIds.clear();
+      mappings = nextMappings;
+      renderList();
+      tryAutoLogin(mappings);
+    }
+
+    async function importMappingsFromFile(file) {
+      if (!(file instanceof File)) {
+        return;
+      }
+
+      const text = await file.text();
+      const nextMappings = normalizeImportedMappings(JSON.parse(text));
+      if (!window.confirm(`将导入 ${nextMappings.length} 条 VPS 信息，并覆盖当前已保存列表。是否继续？`)) {
+        return;
+      }
+
+      replaceMappingsFromImport(nextMappings);
     }
 
     function deleteMapping(id) {
@@ -3136,6 +3241,32 @@
     addMappingButton?.addEventListener('click', () => {
       if (!manualCreatorOpen) {
         openManualCreator();
+      }
+    });
+
+    exportMappingsButton?.addEventListener('click', () => {
+      exportMappings();
+    });
+
+    importMappingsButton?.addEventListener('click', () => {
+      if (importFileInput instanceof HTMLInputElement) {
+        importFileInput.value = '';
+        importFileInput.click();
+      }
+    });
+
+    importFileInput?.addEventListener('change', async () => {
+      if (!(importFileInput instanceof HTMLInputElement)) {
+        return;
+      }
+
+      const file = importFileInput.files?.[0] || null;
+      try {
+        await importMappingsFromFile(file);
+      } catch (error) {
+        window.alert(`导入失败：${error?.message || error}`);
+      } finally {
+        importFileInput.value = '';
       }
     });
 

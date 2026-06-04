@@ -17,9 +17,14 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
 - **便捷交互 (Interactive UI)**：
     - **悬浮面板**：支持拖动、左右吸附及状态显示。
     - **手动新增**：支持在面板中手动输入 VPS 信息并添加记录。
+    - **数据迁移**：支持导入/导出已保存 VPS 信息（JSON 数组）。
     - **安全删除**：删除记录前增加确认步骤，防止误操作。
     - **动态操作**：通过面板更新、删除或直接跳转至已保存的 VPS 地址。
     - **数据更新**：各个Tab间数据进行实时同步
+- **Chrome 插件版本 (Chrome Extension)**：
+    - 插件独立保存 VPS 信息，不与用户脚本/ScriptCat 数据互通。
+    - 插件迁移脚本的自动填充、自动登录、进入远程、标题同步、外部清单页跳转与面板管理能力。
+    - 插件移除了浏览器弹窗权限检测，打开远程新 Tab 由扩展后台处理。
 
 ---
 
@@ -31,7 +36,16 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
     - **更新**：更新已有地址的密码记录。
     - **删除**：移除不再需要的映射关系（需点击二次确认）。
     - **快速跳转**：点击列表中已存储的项目，快速跳转至对应的 VPS 地址。
+    - **导入/导出**：导出或导入 JSON 数组，格式为 `[{ "id": "...", "number": "...", "url": "...", "password": "..." }]`。
 3. **自动化体验**：当再次访问已保存的 VPS 链接时，脚本将自动完成从“匹配 -> 登录 -> 进入远程 -> 修改标题”的全过程。
+
+### Chrome 插件模式 / Chrome Extension Mode
+
+1. 打开 Chrome 的 `chrome://extensions/`，开启“开发者模式”。
+2. 点击“加载已解压的扩展程序”，选择项目内的 `chrome-extension` 文件夹。
+3. 在用户脚本面板中导出 JSON，再在 Chrome 插件页面面板或插件弹窗中导入同一 JSON。
+
+用户脚本和 Chrome 插件使用相同 JSON 数据格式，但存储彼此独立，不会自动同步。
 
 ---
 
@@ -43,11 +57,12 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
 
 ## ⚠️ 注意事项 / Notes
 
-- **数据安全**：密码映射保存在本地油猴（Userscript）存储中，请妥善保管您的本地数据。
+- **数据安全**：密码映射保存在本地用户脚本或 Chrome 插件存储中，请妥善保管您的本地数据。
 - **防误删机制**：执行删除操作时请注意弹窗确认，一旦删除需重新手动录入。
 - **浏览器权限**：
     - 自动打开远程页面功能可能需要您在浏览器设置中**允许弹出窗口**。
     - 脚本关闭旧标签页的行为受浏览器安全策略限制，可能在某些环境下失效。
+    - Chrome 插件版本由扩展后台打开远程新 Tab，不执行脚本版弹窗权限检测。
 - **兼容性说明**：若酷鸟云官方调整页面结构（如 ID 或 Class 变更），脚本识别登录框或“进入远程”按钮的逻辑可能需要随之更新。
 
 ---
