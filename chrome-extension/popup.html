@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VPS 增强助手</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>VPS 登录信息</h1>
+          <p id="pageStatus" class="page-status">连接中</p>
+        </div>
+        <button id="refreshButton" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+      </header>
+
+      <section id="notice" class="notice" hidden></section>
+
+      <section id="currentSection" class="section" hidden></section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2>已保存</h2>
+          <div class="toolbar">
+            <select id="sortSelect" class="select" aria-label="排序方式">
+              <option value="createdAt">按添加时间</option>
+              <option value="number">按 VPS 编号</option>
+            </select>
+            <button id="importButton" class="ghost-button" type="button">导入</button>
+            <button id="exportButton" class="ghost-button" type="button">导出</button>
+            <button id="toggleManualButton" class="ghost-button" type="button">新增</button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden />
+          </div>
+        </div>
+        <input id="searchInput" class="input search-input" type="text" placeholder="搜索编号、链接" autocomplete="off" />
+        <form id="manualForm" class="manual-form" hidden>
+          <input id="manualUrl" class="input" type="text" placeholder="链接 URL" autocomplete="off" />
+          <input id="manualNumber" class="input" type="text" placeholder="编号" autocomplete="off" />
+          <input id="manualPassword" class="input" type="password" placeholder="密码" autocomplete="off" />
+          <div class="form-actions">
+            <button class="primary-button" type="submit">保存</button>
+            <button id="cancelManualButton" class="muted-button" type="button">取消</button>
+          </div>
+        </form>
+        <div id="list" class="list"></div>
+      </section>
+    </main>
+
+    <div id="confirmOverlay" class="confirm-overlay" hidden>
+      <section class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h2 id="confirmTitle">确认删除？</h2>
+        <p id="confirmMeta" class="confirm-meta"></p>
+        <div class="confirm-actions">
+          <button id="cancelDeleteButton" class="muted-button" type="button">取消</button>
+          <button id="confirmDeleteButton" class="danger-button" type="button">删除</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

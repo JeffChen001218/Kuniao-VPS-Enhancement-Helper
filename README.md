@@ -24,7 +24,7 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
 - **Chrome 插件版本 (Chrome Extension)**：
     - 插件独立保存 VPS 信息，不与用户脚本/ScriptCat 数据互通。
     - 插件迁移脚本的自动填充、自动登录、进入远程、标题同步、外部清单页跳转与面板管理能力。
-    - 插件移除了浏览器弹窗权限检测，打开远程新 Tab 由扩展后台处理。
+    - 插件移除了浏览器弹窗权限检测；自动“进入远程”只模拟页面按钮点击，由官网自行打开远程标签页，随后插件关闭触发点击的页面。
 
 ---
 
@@ -62,7 +62,7 @@ An enhanced script for Kuniao VPS, designed to improve maintenance efficiency th
 - **浏览器权限**：
     - 自动打开远程页面功能可能需要您在浏览器设置中**允许弹出窗口**。
     - 脚本关闭旧标签页的行为受浏览器安全策略限制，可能在某些环境下失效。
-    - Chrome 插件版本由扩展后台打开远程新 Tab，不执行脚本版弹窗权限检测。
+    - Chrome 插件版本不执行脚本版弹窗权限检测；自动“进入远程”只模拟页面按钮点击，并在点击后关闭触发页面。
 - **兼容性说明**：若酷鸟云官方调整页面结构（如 ID 或 Class 变更），脚本识别登录框或“进入远程”按钮的逻辑可能需要随之更新。
 
 ---
