@@ -1059,6 +1059,17 @@ function collectElements() {
   elements.confirmDeleteButton = $('#confirmDeleteButton');
 }
 
+function focusSearchInput() {
+  if (!(elements.searchInput instanceof HTMLInputElement)) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    elements.searchInput.focus();
+    elements.searchInput.select();
+  }, 0);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   collectElements();
   bindEvents();
@@ -1070,4 +1081,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.searchInput.value = searchKeyword;
   }
   render();
+  focusSearchInput();
 });
