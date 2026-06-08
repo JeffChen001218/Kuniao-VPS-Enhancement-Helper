@@ -18,6 +18,7 @@ let pendingDeleteId = '';
 let currentPageState = null;
 let sortMode = 'createdAt';
 let searchKeyword = '';
+let selectedItemId = '';
 
 function $(selector) {
   return document.querySelector(selector);
@@ -458,7 +459,7 @@ function renderManualForm() {
   }
 }
 
-function getSavedItemMarkup(item, displayState) {
+function getSavedItemMarkup(item, displayState, selected) {
   const matched = displayState === 'matched';
   const associated = displayState === 'associated';
   const passwordEditing = editingPasswordIds.has(item.id);
@@ -472,7 +473,7 @@ function getSavedItemMarkup(item, displayState) {
   const numberActionText = savedNumber ? '更新' : '添加';
 
   return `
-    <article class="item ${matched ? 'active' : ''} ${associated ? 'associated' : ''}" data-id="${escapeHtml(item.id)}">
+    <article class="item ${matched ? 'active' : ''} ${associated ? 'associated' : ''} ${selected ? 'selected' : ''}" data-id="${escapeHtml(item.id)}">
       <div class="number-row">
         ${numberEditing ? `
           <span class="field-label">编号</span>
@@ -496,15 +497,15 @@ function getSavedItemMarkup(item, displayState) {
         <button class="item-password" type="button" data-action="edit-password" data-id="${escapeHtml(item.id)}" title="点击编辑密码">密码：${escapeHtml(passwordText)}</button>
       `}
       <div class="item-actions">
-        ${matched ? '' : `<button class="chip-button" data-action="jump" data-id="${escapeHtml(item.id)}" type="button">跳转</button>`}
-        ${matched ? '' : `<button class="chip-button success" data-action="open-tab" data-id="${escapeHtml(item.id)}" type="button">新Tab</button>`}
+        ${matched ? '' : `<button class="chip-button" data-action="jump" data-id="${escapeHtml(item.id)}" data-shortcut="Enter" type="button">跳转</button>`}
+        ${matched ? '' : `<button class="chip-button success" data-action="open-tab" data-id="${escapeHtml(item.id)}" data-shortcut="⌘Command+Enter" type="button">新Tab</button>`}
         <button class="chip-button danger-soft" data-action="delete" data-id="${escapeHtml(item.id)}" type="button">删除</button>
       </div>
     </article>
   `;
 }
 
-function getUnsavedItemMarkup(item) {
+function getUnsavedItemMarkup(item, selected) {
   const passwordDraft = passwordDrafts.has(item.id) ? passwordDrafts.get(item.id) : '';
   const passwordChanged = passwordDraft.trim() !== '';
   const savedNumber = item.number || '';
@@ -513,7 +514,7 @@ function getUnsavedItemMarkup(item) {
   const numberChanged = draftNumber.trim() !== savedNumber;
 
   return `
-    <article class="item active unsaved" data-id="${escapeHtml(item.id)}">
+    <article class="item active unsaved ${selected ? 'selected' : ''}" data-id="${escapeHtml(item.id)}">
       <div class="number-row">
         ${numberEditing ? `
           <span class="field-label">编号</span>
@@ -575,8 +576,40 @@ function getSortedItems() {
   };
 }
 
-function renderList() {
+function updateSelectedItem(items, { resetSelection = false } = {}) {
+  if (!items.length) {
+    selectedItemId = '';
+    return;
+  }
+
+  if (resetSelection || !items.some((item) => item.id === selectedItemId)) {
+    selectedItemId = items[0].id;
+  }
+}
+
+function getSelectedItem(items) {
+  if (!items.length) {
+    return null;
+  }
+
+  updateSelectedItem(items);
+  return items.find((item) => item.id === selectedItemId) || items[0] || null;
+}
+
+function scrollSelectedItemIntoView() {
+  const selectedItem = elements.list?.querySelector('.item.selected');
+  if (selectedItem instanceof HTMLElement) {
+    selectedItem.scrollIntoView({
+      block: 'nearest',
+    });
+  }
+}
+
+function renderList({ resetSelection = false, scrollSelection = false } = {}) {
   const { items } = getSortedItems();
+  updateSelectedItem(items, {
+    resetSelection,
+  });
   if (items.length === 0) {
     elements.list.innerHTML = searchKeyword.trim()
       ? '<div class="empty">没有匹配到符合搜索条件的 VPS 信息。</div>'
@@ -586,9 +619,13 @@ function renderList() {
 
   elements.list.innerHTML = items.map((item) => (
     item.unsaved
-      ? getUnsavedItemMarkup(item)
-      : getSavedItemMarkup(item, getItemDisplayState(item))
+      ? getUnsavedItemMarkup(item, item.id === selectedItemId)
+      : getSavedItemMarkup(item, getItemDisplayState(item), item.id === selectedItemId)
   )).join('');
+
+  if (resetSelection || scrollSelection) {
+    scrollSelectedItemIntoView();
+  }
 }
 
 function renderConfirm() {
@@ -599,10 +636,10 @@ function renderConfirm() {
     : '';
 }
 
-function render() {
+function render(options = {}) {
   setStatus();
   renderManualForm();
-  renderList();
+  renderList(options);
   renderConfirm();
 }
 
@@ -772,6 +809,44 @@ function getNavigationTargetUrl(item) {
   return getPreferredMappingUrl(item);
 }
 
+async function activateSelectedItem({ openInNewTab = false } = {}) {
+  const { items } = getSortedItems();
+  const selectedItem = getSelectedItem(items);
+  const url = getNavigationTargetUrl(selectedItem);
+  if (!selectedItem || !url) {
+    return;
+  }
+
+  if (openInNewTab) {
+    await openNewTab(url);
+  } else {
+    await jumpCurrentTab(url);
+  }
+
+  window.close();
+}
+
+function moveSelectedItem(step) {
+  const { items } = getSortedItems();
+  if (!items.length) {
+    selectedItemId = '';
+    return;
+  }
+
+  updateSelectedItem(items);
+  const currentIndex = items.findIndex((item) => item.id === selectedItemId);
+  const safeCurrentIndex = currentIndex === -1 ? 0 : currentIndex;
+  const nextIndex = Math.min(items.length - 1, Math.max(0, safeCurrentIndex + step));
+  if (nextIndex === safeCurrentIndex) {
+    return;
+  }
+
+  selectedItemId = items[nextIndex].id;
+  renderList({
+    scrollSelection: true,
+  });
+}
+
 function focusNumberInput(id) {
   setTimeout(() => {
     const input = $(`.number-input[data-id="${cssEscape(id)}"]`);
@@ -802,17 +877,54 @@ function bindEvents() {
       elements.searchInput.value = searchKeyword;
     }
     setNotice('');
-    render();
+    render({
+      resetSelection: true,
+    });
   });
 
   elements.sortSelect.addEventListener('change', async () => {
     await writeSortMode(elements.sortSelect.value);
-    renderList();
+    renderList({
+      resetSelection: true,
+    });
   });
 
   elements.searchInput.addEventListener('input', () => {
     searchKeyword = elements.searchInput.value || '';
-    renderList();
+    renderList({
+      resetSelection: true,
+    });
+  });
+
+  elements.searchInput.addEventListener('keydown', async (event) => {
+    if (event.isComposing || pendingDeleteId) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveSelectedItem(1);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveSelectedItem(-1);
+      return;
+    }
+
+    if (event.key !== 'Enter' || event.altKey || event.ctrlKey) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      await activateSelectedItem({
+        openInNewTab: event.metaKey,
+      });
+    } catch (error) {
+      setNotice(error.message || String(error));
+    }
   });
 
   elements.toggleManualButton.addEventListener('click', () => {
@@ -1080,6 +1192,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (elements.searchInput instanceof HTMLInputElement) {
     elements.searchInput.value = searchKeyword;
   }
-  render();
+  render({
+    resetSelection: true,
+  });
   focusSearchInput();
 });
