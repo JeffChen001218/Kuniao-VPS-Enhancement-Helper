@@ -19,6 +19,7 @@ let currentPageState = null;
 let sortMode = 'createdAt';
 let searchKeyword = '';
 let selectedItemId = '';
+const shortcutPlatform = detectShortcutPlatform();
 
 function $(selector) {
   return document.querySelector(selector);
@@ -39,6 +40,31 @@ function cssEscape(value) {
   }
 
   return String(value).replaceAll('"', '\\"');
+}
+
+function detectShortcutPlatform() {
+  const platform = typeof navigator !== 'undefined'
+    ? (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '')
+    : '';
+  return /mac|iphone|ipad|ipod/i.test(String(platform)) ? 'mac' : 'other';
+}
+
+function isPrimaryModifierPressed(event) {
+  return shortcutPlatform === 'mac' ? event.metaKey : event.ctrlKey;
+}
+
+function hasUnexpectedShortcutModifier(event) {
+  return event.altKey ||
+    event.shiftKey ||
+    (shortcutPlatform === 'mac' ? event.ctrlKey : event.metaKey);
+}
+
+function getOpenInNewTabShortcutLabel() {
+  return shortcutPlatform === 'mac' ? '⌘Command+Enter' : 'Ctrl+Enter';
+}
+
+function getDeleteShortcutLabel() {
+  return shortcutPlatform === 'mac' ? '⌘Command+⌫' : 'Ctrl+Backspace';
 }
 
 function normalizeHostName(host) {
@@ -498,8 +524,8 @@ function getSavedItemMarkup(item, displayState, selected) {
       `}
       <div class="item-actions">
         ${matched ? '' : `<button class="chip-button" data-action="jump" data-id="${escapeHtml(item.id)}" data-shortcut="Enter" type="button">跳转</button>`}
-        ${matched ? '' : `<button class="chip-button success" data-action="open-tab" data-id="${escapeHtml(item.id)}" data-shortcut="⌘Command+Enter" type="button">新Tab</button>`}
-        <button class="chip-button danger-soft" data-action="delete" data-id="${escapeHtml(item.id)}" type="button">删除</button>
+        ${matched ? '' : `<button class="chip-button success" data-action="open-tab" data-id="${escapeHtml(item.id)}" data-shortcut="${escapeHtml(getOpenInNewTabShortcutLabel())}" type="button">新Tab</button>`}
+        <button class="chip-button danger-soft" data-action="delete" data-id="${escapeHtml(item.id)}" data-shortcut="${escapeHtml(getDeleteShortcutLabel())}" type="button">删除</button>
       </div>
     </article>
   `;
@@ -826,6 +852,27 @@ async function activateSelectedItem({ openInNewTab = false } = {}) {
   window.close();
 }
 
+function requestDeleteForItem(id) {
+  const item = getMappingById(id);
+  if (!item || isTemporaryMappingId(item.id)) {
+    return false;
+  }
+
+  pendingDeleteId = id;
+  renderConfirm();
+  return true;
+}
+
+function requestDeleteSelectedItem() {
+  const { items } = getSortedItems();
+  const selectedItem = getSelectedItem(items);
+  if (!selectedItem) {
+    return false;
+  }
+
+  return requestDeleteForItem(selectedItem.id);
+}
+
 function moveSelectedItem(step) {
   const { items } = getSortedItems();
   if (!items.length) {
@@ -845,6 +892,21 @@ function moveSelectedItem(step) {
   renderList({
     scrollSelection: true,
   });
+}
+
+async function confirmPendingDelete() {
+  if (!pendingDeleteId) {
+    return;
+  }
+
+  await writeMappings(mappings.filter((item) => item.id !== pendingDeleteId));
+  numberDrafts.delete(pendingDeleteId);
+  editingNumberIds.delete(pendingDeleteId);
+  passwordDrafts.delete(pendingDeleteId);
+  editingPasswordIds.delete(pendingDeleteId);
+  pendingDeleteId = '';
+  setNotice('');
+  render();
 }
 
 function focusNumberInput(id) {
@@ -913,15 +975,49 @@ function bindEvents() {
       return;
     }
 
-    if (event.key !== 'Enter' || event.altKey || event.ctrlKey) {
+    if (event.key === 'Backspace' && isPrimaryModifierPressed(event) && !hasUnexpectedShortcutModifier(event)) {
+      event.preventDefault();
+      requestDeleteSelectedItem();
+      return;
+    }
+
+    if (event.key !== 'Enter') {
+      return;
+    }
+
+    if (hasUnexpectedShortcutModifier(event) || (event.ctrlKey || event.metaKey) && !isPrimaryModifierPressed(event)) {
       return;
     }
 
     event.preventDefault();
     try {
       await activateSelectedItem({
-        openInNewTab: event.metaKey,
+        openInNewTab: isPrimaryModifierPressed(event),
       });
+    } catch (error) {
+      setNotice(error.message || String(error));
+    }
+  });
+
+  document.addEventListener('keydown', async (event) => {
+    if (!pendingDeleteId || event.isComposing) {
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      pendingDeleteId = '';
+      renderConfirm();
+      return;
+    }
+
+    if (event.key !== 'Enter' || event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      await confirmPendingDelete();
     } catch (error) {
       setNotice(error.message || String(error));
     }
@@ -1109,8 +1205,7 @@ function bindEvents() {
         await openNewTab(getNavigationTargetUrl(item));
         window.close();
       } else if (action === 'delete') {
-        pendingDeleteId = id;
-        renderConfirm();
+        requestDeleteForItem(id);
       }
     } catch (error) {
       setNotice(error.message || String(error));
@@ -1132,18 +1227,7 @@ function bindEvents() {
   });
 
   elements.confirmDeleteButton.addEventListener('click', async () => {
-    if (!pendingDeleteId) {
-      return;
-    }
-
-    await writeMappings(mappings.filter((item) => item.id !== pendingDeleteId));
-    numberDrafts.delete(pendingDeleteId);
-    editingNumberIds.delete(pendingDeleteId);
-    passwordDrafts.delete(pendingDeleteId);
-    editingPasswordIds.delete(pendingDeleteId);
-    pendingDeleteId = '';
-    setNotice('');
-    render();
+    await confirmPendingDelete();
   });
 }
 
