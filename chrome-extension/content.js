@@ -11,6 +11,7 @@
   const EXTERNAL_JUMP_BUTTON_CLASS = 'tm-vps-saved-link-jump';
   const RENDER_LABEL_CLASS = 'render-label';
   const AVATAR_CLASS = 'n-avatar';
+  const PROJECT_NUMBER_PATTERN = /\d{3}[A-Z]/;
   const SUBMIT_GUARD_MS = 60000;
   const REMOTE_CLICK_GUARD_MS = 15000;
   const REMOTE_CLICK_DELAY_MS = 500;
@@ -239,6 +240,10 @@
   function findMappingForCurrentPage(mappings = readMappings()) {
     const currentKey = getMappingMatchKey(location.href);
     return mappings.find((item) => getMappingMatchKey(item.url) === currentKey) || null;
+  }
+
+  function extractProjectNumber(value) {
+    return String(value || '').match(PROJECT_NUMBER_PATTERN)?.[0] || '';
   }
 
   function syncDocumentTitle(mappings = readMappings()) {
@@ -705,6 +710,19 @@
     )) || null;
   }
 
+  function syncExternalProjectTitle() {
+    if (!isExternalSavedLinkHost()) {
+      return;
+    }
+
+    const projectNumber = getExactClassSpans(RENDER_LABEL_CLASS)
+      .map((label) => extractProjectNumber(label.textContent))
+      .find(Boolean);
+    if (projectNumber && document.title !== projectNumber) {
+      document.title = projectNumber;
+    }
+  }
+
   function getExternalMatchedMappings(mappings = readMappings()) {
     if (!isExternalSavedLinkHost()) {
       return [];
@@ -858,6 +876,7 @@
     if (!isExternalSavedLinkHost()) {
       return;
     }
+    syncExternalProjectTitle();
     void mappings;
     removeExternalSavedLinkButtons();
   }
